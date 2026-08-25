@@ -1,0 +1,67 @@
+{
+  "$id": "vm-intent.schema.json",
+  "title": "VM Intent",
+  "description": "Canonical internal VM intent produced by the agent and validated by the backend. Never shown raw to normal users.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "vm", "requires_confirmation"],
+  "properties": {
+    "operation": {
+      "type": "string",
+      "enum": ["create_vm", "list_vms", "start_vm", "stop_vm", "reboot_vm", "get_vm"]
+    },
+    "vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$" },
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "family": { "type": ["string", "null"] },
+            "version": { "type": ["string", "null"] },
+            "variant": { "type": ["string", "null"] },
+            "installation": { "type": ["string", "null"], "enum": ["iso", "master_image", null] }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vcpus": { "type": ["integer", "null"], "minimum": 1 },
+            "memory_mb": { "type": ["integer", "null"], "minimum": 1 },
+            "disk_gb": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "disk_path": { "type": ["string", "null"] },
+            "disk_format": { "type": ["string", "null"], "enum": ["qcow2", null] },
+            "master_image": { "type": ["string", "null"] }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bridge": { "type": ["string", "null"] }
+          }
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": ["string", "null"], "enum": ["vnc", null] }
+          }
+        }
+      }
+    },
+    "missing_fields": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "validation_status": { "type": "string", "enum": ["valid", "invalid", "incomplete", "unknown"] },
+    "requires_confirmation": { "type": "boolean" }
+  }
+}
