@@ -1,4 +1,10 @@
-import Ajv, { type ValidateFunction } from 'ajv';
+import AjvModule, { type ValidateFunction, type Options } from 'ajv';
+
+// Ajv v8 is CommonJS; under NodeNext the constructor may arrive as the module's
+// default export. Normalize the interop so `new Ajv(...)` works everywhere.
+type AjvCtor = new (opts?: Options) => { compile: (schema: unknown) => ValidateFunction };
+const Ajv = ((AjvModule as unknown as { default?: AjvCtor }).default ??
+  (AjvModule as unknown as AjvCtor)) as AjvCtor;
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
