@@ -1,0 +1,26 @@
+{
+  "vm": {
+    "disk_path": "/home/ithokben/kvm/disks",
+    "master_image_dir": "/home/ithokben/kvm/images",
+    "default_master_image": "/home/ithokben/kvm/images/fedora-coreos-41-qemu.x86_64.qcow2",
+    "ignition": {
+      "default_hostname": "coreos",
+      "default_user": "core",
+      "default_timezone": "UTC",
+      "default_locale": "en_US.UTF-8",
+      "default_ssh_key": "~/.ssh/id_rsa.pub"
+    },
+    "defaults": {
+      "memory": 2048,
+      "vcpus": 2,
+      "disk_size": 20,
+      "network": "brforvms",
+      "os_variant": "fedora-coreos-stable"
+    }
+  },
+  "server": {
+    "log_level": "INFO",
+    "max_connections": 5,
+    "connection_timeout": 30
+  }
+} 

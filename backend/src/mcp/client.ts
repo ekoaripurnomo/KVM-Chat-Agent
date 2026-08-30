@@ -19,9 +19,14 @@ export const MCP_TOOL_CATALOG: McpToolSchema[] = [
       vcpus: { type: 'integer', required: true, note: '1..128' },
       disk_size: { type: 'integer(GB)', required: false, note: 'default 20, 1..10000' },
       network: { type: 'string', required: false, note: 'default brforvms' },
-      master_image: { type: 'string', required: true, note: 'host path, must exist' },
-      ignition: { type: 'object', required: true },
-      os_variant: { type: 'string', required: false, note: 'default fedora-coreos-stable' },
+      install_iso: { type: 'string', required: false, note: 'ISO install; host path, must exist' },
+      master_image: { type: 'string', required: false, note: 'qcow2 import; host path, must exist' },
+      ignition: { type: 'object', required: false, note: 'required for master_image mode' },
+      os_variant: { type: 'string', required: false, note: 'default generic' },
+      username: { type: 'string', required: false, note: 'autoinstall: login user' },
+      password: { type: 'string', required: false, note: 'autoinstall: hashed host-side' },
+      hostname: { type: 'string', required: false, note: 'autoinstall: guest hostname' },
+      ssh_key: { type: 'string', required: false, note: 'autoinstall: authorized key' },
     },
   },
   {
@@ -46,6 +51,28 @@ export const MCP_TOOL_CATALOG: McpToolSchema[] = [
     name: 'reboot_vm',
     description: 'Reboot a running VM.',
     arguments: { vm_name: { type: 'string', required: true } },
+  },
+  {
+    name: 'download_master_image',
+    description: 'Download a master/base image from an http(s) URL into the master-image directory.',
+    arguments: {
+      url: { type: 'string', required: true, note: 'http/https only' },
+      filename: { type: 'string', required: false, note: 'derived from URL if omitted' },
+      dest_dir: { type: 'string', required: false, note: 'host-side directory' },
+    },
+  },
+  {
+    name: 'get_vm_access',
+    description: 'Return a VM running state and known IPv4 addresses (lease/guest agent).',
+    arguments: { vm_name: { type: 'string', required: true } },
+  },
+  {
+    name: 'delete_vm',
+    description: 'Delete a VM: stop, undefine, and remove its disk + seed files. Destructive.',
+    arguments: {
+      vm_name: { type: 'string', required: true },
+      remove_disks: { type: 'boolean', required: false, note: 'default true' },
+    },
   },
 ];
 
@@ -179,7 +206,25 @@ export class MockMcpClient extends BaseMcpClient {
     string,
     { name: string; id: number; state: string; autostart: boolean; persistent: boolean }
   >();
+  private readonly images = new Set<string>();
   private idSeq = 1;
+
+  constructor() {
+    super();
+    this.seed();
+  }
+
+  private seed(): void {
+    if (this.vms.size === 0) {
+      this.vms.set('demo-vm-01', {
+        name: 'demo-vm-01',
+        id: this.idSeq++,
+        state: 'running',
+        autostart: true,
+        persistent: true,
+      });
+    }
+  }
 
   async connect(): Promise<void> {
     if (this.vms.size === 0) {
@@ -197,6 +242,9 @@ export class MockMcpClient extends BaseMcpClient {
     switch (name) {
       case 'create_vm': {
         const vmName = String(args.name ?? '');
+        if (!args.install_iso && !args.master_image) {
+          return { status: 'error', message: 'Either install_iso or master_image must be provided' };
+        }
         if (this.vms.has(vmName)) {
           return { status: 'error', message: `Disk image /vm/${vmName}.qcow2 already exists` };
         }
@@ -207,7 +255,16 @@ export class MockMcpClient extends BaseMcpClient {
           autostart: false,
           persistent: true,
         });
-        return { status: 'success', message: `VM ${vmName} created successfully using virt-install` };
+        if (args.install_iso && args.username && args.password) {
+          return {
+            status: 'success',
+            message: `VM ${vmName} sedang menginstal Ubuntu tanpa pengawasan (autoinstall)`,
+            autoinstall: true,
+            username: String(args.username),
+          };
+        }
+        const via = args.install_iso ? 'from ISO' : 'using virt-install';
+        return { status: 'success', message: `VM ${vmName} created successfully ${via}` };
       }
       case 'list_vms':
         return [...this.vms.values()];
@@ -227,6 +284,40 @@ export class MockMcpClient extends BaseMcpClient {
         const vm = this.vms.get(String(args.vm_name));
         if (!vm) return { success: false, error: 'Domain not found' };
         return { success: true, message: `VM ${vm.name} rebooted successfully` };
+      }
+      case 'delete_vm': {
+        const name = String(args.vm_name);
+        if (!this.vms.has(name)) return { status: 'error', message: `VM ${name} not found` };
+        this.vms.delete(name);
+        return { status: 'success', message: `VM ${name} deleted`, removed: [`/vm/${name}.qcow2`] };
+      }
+      case 'get_vm_access': {
+        const vm = this.vms.get(String(args.vm_name));
+        if (!vm) return { status: 'error', message: `VM ${String(args.vm_name)} not found` };
+        // Mock: pretend a running VM has a lease IP.
+        const ips = vm.state === 'running' ? ['192.168.122.50'] : [];
+        return {
+          status: 'success',
+          name: vm.name,
+          active: vm.state === 'running',
+          ips,
+          ip_source: ips.length ? 'lease' : null,
+        };
+      }
+      case 'download_master_image': {
+        const url = String(args.url ?? '');
+        if (!/^https?:\/\//i.test(url)) {
+          return { status: 'error', message: 'Only http/https URLs are allowed.' };
+        }
+        const destDir = String(args.dest_dir ?? '/iso');
+        const filename =
+          String(args.filename ?? '') || url.split('/').filter(Boolean).pop() || 'image';
+        const path = `${destDir}/${filename}`;
+        if (this.images.has(path)) {
+          return { status: 'success', message: `Image already present at ${path}`, path, already_present: true };
+        }
+        this.images.add(path);
+        return { status: 'success', message: `Downloaded image to ${path}`, path, bytes: 1024 };
       }
       default:
         throw new McpError(`Unknown MCP tool: ${name}`);

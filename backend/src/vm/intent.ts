@@ -8,7 +8,10 @@ export type VmOperation =
   | 'start_vm'
   | 'stop_vm'
   | 'reboot_vm'
-  | 'get_vm';
+  | 'get_vm'
+  | 'get_vm_access'
+  | 'delete_vm'
+  | 'download_master_image';
 
 export type ValidationStatus = 'valid' | 'invalid' | 'incomplete' | 'unknown';
 
@@ -59,6 +62,22 @@ export interface NormalizedConfig {
   diskGb: number;
   network: string;
   display: string;
+  /** Login credentials for unattended (autoinstall) ISO installs. */
+  credentials?: {
+    username: string;
+    password: string;
+    hostname: string;
+  };
+}
+
+/**
+ * Fully-resolved master-image download request. The URL comes from the user;
+ * the destination directory is host-side app configuration (never the LLM).
+ */
+export interface NormalizedDownload {
+  url: string;
+  filename: string;
+  destDir: string;
 }
 
 export function emptyIntent(operation: VmOperation = 'create_vm'): VmIntent {

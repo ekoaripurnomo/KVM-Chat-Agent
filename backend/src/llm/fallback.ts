@@ -15,9 +15,78 @@ export interface AgentResult {
     network: { bridge: string | null };
   };
   target_vm: string | null;
+  /** For download_master_image: the http(s) URL the user provided, if any. */
+  download_url?: string | null;
   missing_fields: string[];
   warnings: string[];
   user_message: string;
+}
+
+/** Extract the first http(s) URL from a message, if present. */
+export function extractUrl(message: string): string | null {
+  const match = message.match(/https?:\/\/[^\s"'<>]+/i);
+  return match ? match[0].replace(/[.,;)]+$/, '') : null;
+}
+
+/**
+ * Detect a request to access / SSH into a VM, e.g. "how to ssh web-02",
+ * "akses web-01", "ip address web-02". Returns the target VM name if found.
+ */
+export function detectAccess(message: string): { target: string | null } | null {
+  const m = message.toLowerCase();
+  const wantsAccess =
+    /\b(ssh|akses|access|login|masuk|connect|remote|ip address|ip)\b/.test(m);
+  if (!wantsAccess) return null;
+
+  // Words that are keywords/filler, never a VM name.
+  const STOP = new Set([
+    'ssh', 'akses', 'access', 'login', 'masuk', 'connect', 'remote', 'ip',
+    'address', 'ke', 'to', 'the', 'into', 'vm', 'cara', 'how', 'bagaimana',
+    'untuk', 'ke-', 'get', 'info', 'alamat',
+  ]);
+
+  // Prefer the token immediately after an access keyword; skip filler words.
+  const tokens = message.split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const w = tokens[i].toLowerCase().replace(/[^a-z]/g, '');
+    if (['ssh', 'akses', 'access', 'login', 'masuk', 'connect', 'remote', 'ip'].includes(w)) {
+      // Scan forward for the first non-stopword name-shaped token.
+      for (let j = i + 1; j < tokens.length; j++) {
+        const cand = tokens[j].replace(/[^A-Za-z0-9._-]/g, '');
+        if (cand && !STOP.has(cand.toLowerCase()) && /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(cand)) {
+          return { target: cand };
+        }
+      }
+    }
+  }
+  return { target: null };
+}
+
+/**
+ * Detect a request to delete/remove a VM, e.g. "hapus vm web-01",
+ * "delete web-02". Returns the target VM name if found.
+ */
+export function detectDelete(message: string): { target: string | null } | null {
+  const m = message.toLowerCase();
+  if (!/\b(hapus|delete|remove|destroy|buang|hancurkan)\b/.test(m)) return null;
+  const re = new RegExp(
+    '\\b(?:hapus|delete|remove|destroy|buang|hancurkan)\\b\\s+(?:vm\\s+)?([A-Za-z0-9][A-Za-z0-9._-]{0,62})',
+    'i',
+  );
+  const match = message.match(re);
+  let target = match ? match[1] : null;
+  if (target && /^(vm|the|ini|itu)$/i.test(target)) target = null;
+  return { target };
+}
+
+/** Detect a request to download / add a master image. */
+export function detectDownloadImage(message: string): boolean {
+  const m = message.toLowerCase();
+  const wantsAction = /\b(download|unduh|tambah(kan)?|add|ambil|fetch|get)\b/.test(m);
+  const mentionsImage =
+    /\b(master image|master-image|base image|image|iso|qcow2|img)\b/.test(m);
+  // A bare URL alongside an image word also counts.
+  return (wantsAction && mentionsImage) || (extractUrl(message) !== null && mentionsImage);
 }
 
 // Explicit, standalone affirmatives only. We deliberately DO NOT substring-match
@@ -49,8 +118,11 @@ export function looksLikeConfirmation(message: string): boolean {
   const words = m.split(/\s+/).filter(Boolean);
   if (words.length > 4) return false;
   if (CONFIRM_EXACT.has(m)) return true;
-  // Allow "ya, buat vm" style short directives.
-  if (/^(ya|iya|oke?|yes)[,\s]+(buat|create|lanjut|lanjutkan|proceed)\b/.test(m)) return true;
+  // Allow "ya, buat vm" / "ya, unduh" / "ya, hapus" style short directives.
+  if (
+    /^(ya|iya|oke?|yes)[,\s]+(buat|create|lanjut|lanjutkan|proceed|unduh|download|hapus|delete)\b/.test(m)
+  )
+    return true;
   return false;
 }
 
@@ -171,10 +243,55 @@ export function fallbackExtract(message: string): AgentResult {
       network: { bridge: null },
     },
     target_vm: null,
+    download_url: null,
     missing_fields: [],
     warnings: [],
     user_message: '',
   };
+
+  // Delete intent: "hapus vm web-01", "delete web-02". Destructive — the
+  // orchestrator will require explicit confirmation.
+  const del = detectDelete(message);
+  if (del) {
+    base.intent = 'delete_vm';
+    base.status = del.target ? 'needs_confirmation' : 'needs_info';
+    base.target_vm = del.target;
+    base.user_message = del.target
+      ? `Konfirmasi penghapusan VM ${del.target}.`
+      : 'VM mana yang ingin Anda hapus?';
+    return base;
+  }
+
+  // Access / SSH intent: "how to ssh web-02", "akses web-01", "ip web-02".
+  // Checked before create so it isn't mistaken for a provisioning request.
+  const access = detectAccess(message);
+  if (access) {
+    base.intent = 'get_vm_access';
+    base.status = 'action';
+    base.target_vm = access.target;
+    base.user_message = access.target
+      ? `Mengambil info akses untuk VM ${access.target}.`
+      : 'VM mana yang ingin Anda akses?';
+    return base;
+  }
+
+  // Master-image download intent takes priority over create so that phrases
+  // like "tambahkan master image dari <url>" are not mistaken for VM creation.
+  if (detectDownloadImage(message)) {
+    base.intent = 'download_master_image';
+    const url = extractUrl(message);
+    base.download_url = url;
+    if (url) {
+      base.status = 'needs_confirmation';
+      base.user_message = `Saya akan mengunduh master image dari ${url}.`;
+    } else {
+      base.status = 'needs_info';
+      base.missing_fields = ['download_url'];
+      base.user_message =
+        'Tentu, saya bisa membantu mengunduh master image. Kirimkan tautan (URL) file image-nya (http/https).';
+    }
+    return base;
+  }
 
   const lifecycle = detectLifecycle(message);
   const wantsCreate = /\b(buat|bikin|create|provision|siapkan|new)\b/i.test(message);

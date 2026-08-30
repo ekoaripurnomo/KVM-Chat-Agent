@@ -1,4 +1,17 @@
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+
+/** Read an SSH public key file if present; empty string if none. */
+function readSshPublicKey(configuredPath: string): string {
+  const path = configuredPath.trim() || resolve(homedir(), '.ssh/id_rsa.pub');
+  try {
+    return readFileSync(path, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
 
 function num(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -34,6 +47,10 @@ export interface McpConfig {
   args: string[];
   cwd?: string;
   defaultMasterImage: string;
+  /** Host-side directory where downloaded master images are stored. */
+  masterImageDir: string;
+  /** Optional SSH public key injected into autoinstalled VMs. */
+  sshPublicKey: string;
   callTimeoutMs: number;
 }
 
@@ -92,6 +109,8 @@ export function loadConfig(): AppConfig {
       args: str('MCP_SERVER_ARGS', 'kvm_mcp_server.py').split(' ').filter(Boolean),
       cwd: str('MCP_SERVER_CWD', '') || undefined,
       defaultMasterImage: str('MCP_DEFAULT_MASTER_IMAGE', ''),
+      masterImageDir: str('MCP_MASTER_IMAGE_DIR', '/iso'),
+      sshPublicKey: readSshPublicKey(str('SSH_PUBLIC_KEY_FILE', '')),
       callTimeoutMs: num('MCP_CALL_TIMEOUT_MS', 120000),
     },
     auditLogFile: str('AUDIT_LOG_FILE', './audit/audit.log'),

@@ -240,3 +240,42 @@ body {
   outline: none;
   border-color: var(--accent);
 }
+
+.vm-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 14px;
+}
+.vm-table th,
+.vm-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.vm-table th {
+  color: var(--muted);
+  font-weight: 600;
+  background: rgba(79, 140, 255, 0.08);
+}
+.vm-table tr:last-child td {
+  border-bottom: none;
+}
+.vm-state {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.vm-state-running {
+  color: var(--ok);
+}
+.vm-state-shutoff,
+.vm-state-shut_off {
+  color: var(--muted);
+}
+.vm-state-paused {
+  color: var(--warn);
+}

@@ -33,6 +33,8 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       args: ['kvm_mcp_server.py'],
       cwd: undefined,
       defaultMasterImage: '/iso/base.qcow2',
+      masterImageDir: '/iso',
+      sshPublicKey: '',
       callTimeoutMs: 5000,
     },
     auditLogFile: './audit/test-audit.log',

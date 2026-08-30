@@ -9,11 +9,19 @@ export interface Proposal {
   display: string;
 }
 
+export interface DownloadProposal {
+  confirmation_id: string;
+  url: string;
+  filename: string;
+  dest_dir: string;
+}
+
 export interface ChatResponse {
   conversation_id: string;
   state: string;
   message: string;
   proposal?: Proposal;
+  download_proposal?: DownloadProposal;
   requires_confirmation: boolean;
   warnings: string[];
   vms?: VmSummary[];

@@ -50,6 +50,8 @@ export function buildRouter(deps: RouteDeps): Router {
         state: result.state,
         message: result.message,
         proposal: result.proposal,
+        download_proposal: result.downloadProposal,
+        delete_proposal: result.deleteProposal,
         requires_confirmation: result.requiresConfirmation,
         warnings: result.warnings,
         vms: result.vms,

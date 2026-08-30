@@ -145,6 +145,27 @@ describe('MCP argument transformation', () => {
     });
     expect(args.ignition).toBeTypeOf('object');
   });
+
+  it('uses install_iso (not master_image) when the configured image is an ISO', async () => {
+    const cfg = testConfig({
+      mcp: { ...testConfig().mcp, defaultMasterImage: '/home/x/kvm/images/ubuntu-24.04.iso' },
+    });
+    const vmService = new VmService(cfg, new MockMcpClient());
+    const args = vmService.buildCreateArguments({
+      name: 'web-01',
+      osFamily: 'ubuntu',
+      osVersion: '24.04',
+      osVariant: 'generic',
+      vcpus: 2,
+      memoryMb: 4096,
+      diskGb: 50,
+      network: 'brforvms',
+      display: 'vnc',
+    });
+    expect(args.install_iso).toBe('/home/x/kvm/images/ubuntu-24.04.iso');
+    expect(args.master_image).toBeUndefined();
+    expect(args.ignition).toBeUndefined();
+  });
 });
 
 describe('lifecycle', () => {

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import type { AppConfig } from '../config.js';
-import type { NormalizedConfig, VmIntent } from '../vm/intent.js';
+import type { NormalizedConfig, NormalizedDownload, VmIntent } from '../vm/intent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // backend/src/validation -> repo root schemas/
@@ -36,7 +36,12 @@ export interface ValidationResult {
   warnings: string[];
   /** present only when ok === true and operation === create_vm */
   normalized?: NormalizedConfig;
+  /** present only when ok === true and operation === download_master_image */
+  download?: NormalizedDownload;
 }
+
+const IMAGE_EXT_RE = /\.(qcow2|img|iso|raw|vmdk|qed|vdi)$/i;
+const SAFE_FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 const REQUIRED_CREATE_FIELDS = [
   'name',
@@ -224,6 +229,120 @@ export class ValidationEngine {
             field: 'master_image',
             message:
               'Master image belum dikonfigurasi pada server (MCP_DEFAULT_MASTER_IMAGE). VM belum dibuat.',
+          },
+        ],
+        warnings: [],
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Validate a master-image download request. The URL comes from the (untrusted)
+   * user; the destination directory is host-side app config. Produces a
+   * NormalizedDownload on success. The filename is derived deterministically
+   * from the URL, never from free-form LLM text.
+   */
+  validateDownload(rawUrl: string | null | undefined): ValidationResult {
+    const url = (rawUrl ?? '').trim();
+    if (!url) {
+      return {
+        ok: false,
+        status: 'incomplete',
+        category: 'user',
+        missingFields: ['download_url'],
+        errors: [],
+        warnings: [],
+      };
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return {
+        ok: false,
+        status: 'invalid',
+        category: 'user',
+        missingFields: [],
+        errors: [{ field: 'download_url', message: 'URL tidak valid.' }],
+        warnings: [],
+      };
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return {
+        ok: false,
+        status: 'invalid',
+        category: 'user',
+        missingFields: [],
+        errors: [
+          {
+            field: 'download_url',
+            message: 'Hanya tautan http atau https yang didukung.',
+          },
+        ],
+        warnings: [],
+      };
+    }
+
+    // Derive a safe filename from the URL path (base name only).
+    const rawName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() ?? '');
+    const filename = rawName.replace(/[^A-Za-z0-9._-]/g, '');
+    if (!filename || !SAFE_FILENAME_RE.test(filename)) {
+      return {
+        ok: false,
+        status: 'invalid',
+        category: 'user',
+        missingFields: [],
+        errors: [
+          {
+            field: 'download_url',
+            message:
+              'Tidak dapat menentukan nama file dari URL. Pastikan URL mengarah langsung ke file image.',
+          },
+        ],
+        warnings: [],
+      };
+    }
+
+    const warnings: string[] = [];
+    if (!IMAGE_EXT_RE.test(filename)) {
+      warnings.push(
+        `Ekstensi file "${filename}" tidak umum untuk image (mis. .qcow2/.img/.iso). Pastikan tautan benar.`,
+      );
+    }
+
+    return {
+      ok: true,
+      status: 'valid',
+      missingFields: [],
+      errors: [],
+      warnings,
+      download: {
+        url,
+        filename,
+        destDir: this.cfg.mcp.masterImageDir,
+      },
+    };
+  }
+
+  /**
+   * Infrastructure precondition for downloads: the destination directory must
+   * be configured. The MCP server enforces writability/existence at runtime.
+   */
+  checkDownloadPreconditions(): ValidationResult | null {
+    if (this.cfg.mcp.mode === 'stdio' && !this.cfg.mcp.masterImageDir) {
+      return {
+        ok: false,
+        status: 'invalid',
+        category: 'missing_resource',
+        missingFields: ['master_image_dir'],
+        errors: [
+          {
+            field: 'master_image_dir',
+            message:
+              'Direktori master image belum dikonfigurasi pada server (MCP_MASTER_IMAGE_DIR).',
           },
         ],
         warnings: [],

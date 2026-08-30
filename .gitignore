@@ -8,3 +8,10 @@ build/
 audit/
 coverage/
 .DS_Store
+
+# Python (mcp-server)
+.venv/
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/

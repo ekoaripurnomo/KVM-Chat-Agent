@@ -138,6 +138,10 @@ function mergeWithFallback(parsed: Partial<AgentResult>, userMessage: string): A
       network: { bridge: coalesce(net.bridge, fb.configuration.network.bridge) },
     },
     target_vm: coalesce(parsed.target_vm ?? null, fb.target_vm),
+    download_url: coalesce(
+      typeof parsed.download_url === 'string' ? parsed.download_url : null,
+      fb.download_url ?? null,
+    ),
     missing_fields: Array.isArray(parsed.missing_fields) ? parsed.missing_fields : [],
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
     user_message:
