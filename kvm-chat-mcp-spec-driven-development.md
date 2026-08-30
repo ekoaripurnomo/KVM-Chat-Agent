@@ -198,6 +198,12 @@ The application MUST support at minimum the VM lifecycle use cases exposed by th
 - Reboot VM
 - Obtain VM/display information where supported
 
+> Implementation note (see §43): the `steveydevey/kvm-mcp` server is vendored
+> into this repository at `mcp-server/` and the backend spawns it over stdio.
+> The upstream tool set was extended in the vendored copy with
+> `download_master_image`, `get_vm_access`, and `delete_vm`, and `create_vm`
+> gained an ISO-install path plus an unattended (cloud-init autoinstall) path.
+
 ---
 
 # 6. Security Model
@@ -1216,24 +1222,27 @@ VM successfully created.
 
 The application is considered MVP-complete when:
 
-- [ ] User can open chat UI.
-- [ ] User can describe VM in Indonesian.
-- [ ] Local LLM processes the message.
-- [ ] LLM returns structured VM intent.
-- [ ] Backend validates the intent.
-- [ ] Missing information is requested.
-- [ ] User receives a human-readable configuration proposal.
-- [ ] Raw JSON is hidden from normal users.
-- [ ] User must explicitly confirm.
-- [ ] Backend validates again after confirmation.
-- [ ] MCP tool schema is discovered/validated.
-- [ ] KVM MCP creates the VM.
-- [ ] Result is returned to chat.
-- [ ] Errors are handled gracefully.
-- [ ] Infrastructure operations are logged.
-- [ ] Secrets are not exposed.
-- [ ] Duplicate execution is prevented.
-- [ ] Automated tests cover the critical workflow.
+- [x] User can open chat UI.
+- [x] User can describe VM in Indonesian.
+- [x] Local LLM processes the message.
+- [x] LLM returns structured VM intent.
+- [x] Backend validates the intent.
+- [x] Missing information is requested.
+- [x] User receives a human-readable configuration proposal.
+- [x] Raw JSON is hidden from normal users.
+- [x] User must explicitly confirm.
+- [x] Backend validates again after confirmation.
+- [x] MCP tool schema is discovered/validated. (Static, source-derived catalog — the real server has no `tools/list`; see `docs/mcp-spec.md`.)
+- [x] KVM MCP creates the VM. (Real, verified end-to-end.)
+- [x] Result is returned to chat.
+- [x] Errors are handled gracefully.
+- [x] Infrastructure operations are logged.
+- [x] Secrets are not exposed.
+- [x] Duplicate execution is prevented.
+- [x] Automated tests cover the critical workflow.
+
+Status: **MVP complete.** Additional capabilities delivered beyond the MVP are
+tracked in §43.
 
 ---
 
@@ -1446,6 +1455,11 @@ snapshots
 delete VM
 resource monitoring
 ```
+
+> Implemented beyond the original MVP (see §43): delete VM, cloud-init
+> autoinstall with SSH key + hostname, master-image/ISO download, and VM access
+> (SSH) info. Still not implemented: storage/network profiles, cloning,
+> snapshots, resource monitoring.
 
 ---
 
@@ -1701,3 +1715,148 @@ over:
 ```text
 "I guessed what the user meant and created infrastructure."
 ```
+
+---
+
+# 43. Implementation Status & Extensions (as-built)
+
+This section records what was actually implemented, including capabilities added
+beyond the original MVP scope. It supersedes assumptions in earlier sections
+where they differ. Priority order from §42 (Security > Correctness > Explicit
+confirmation > Deterministic validation > MCP compatibility > UX > Performance)
+was preserved throughout.
+
+## 43.1 Repository layout (as-built)
+
+```text
+kvm-chat-agent/
+├── kvm-chat-mcp-spec-driven-development.md   (this spec)
+├── README.md
+├── RUNNING.md                (full run/host-setup sequence)
+├── .env.example
+├── docs/                     (requirements, architecture, api, agent, mcp, security, testing specs)
+├── prompts/vm-agent-system.md
+├── schemas/vm-intent.schema.json
+├── mcp-server/               (VENDORED steveydevey/kvm-mcp + local extensions)
+│   └── kvm_mcp/
+│       ├── server.py         (JSON-RPC over stdio dispatch)
+│       └── vm/{creation,management,images,autoinstall,ignition}.py
+├── backend/                  (Express + TypeScript)
+│   └── src/{api,agent,llm,mcp,vm,validation,security,audit,conversation}
+└── frontend/                 (React + Vite)
+```
+
+The MCP server is **not** a separate service to start manually. In
+`MCP_MODE=stdio` the backend spawns it as a child process and speaks JSON-RPC
+2.0 (one JSON object per line) over stdin/stdout. `MCP_MODE=mock` uses an
+in-process fake that honors the same schemas for safe demos and tests.
+
+## 43.2 MCP tool catalog (as-built)
+
+The real server exposes no `tools/list`, so the backend keeps a static,
+source-derived catalog (`backend/src/mcp/client.ts` `MCP_TOOL_CATALOG`). Tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `create_vm` | Create a VM. Supports ISO install, unattended autoinstall, and qcow2 master-image import. |
+| `list_vms` | List VMs with state (`use_cache`). |
+| `start_vm` / `stop_vm` / `reboot_vm` | Lifecycle. |
+| `get_vm_access` | Return running state + real IPv4 addresses (DHCP lease, then guest agent). |
+| `delete_vm` | Destroy (if running), undefine, and remove the VM disk + seed ISO. Destructive. |
+| `download_master_image` | Download an http(s) image/ISO into the master-image directory. |
+
+## 43.3 create_vm installation modes (extends §7, §8)
+
+`create_vm` chooses a mode deterministically from the configured install image
+(`MCP_DEFAULT_MASTER_IMAGE`); the LLM never picks the path or image.
+
+1. **ISO install** — image ends in `.iso`. A blank qcow2 disk is created and the
+   installer boots via cdrom. (Interactive completion via VNC unless autoinstall
+   credentials are supplied.)
+2. **Unattended autoinstall** — ISO install + generated credentials. The backend
+   generates a username (derived from the VM name) and a strong password, the
+   MCP server builds an Ubuntu cloud-init `autoinstall` seed ISO (volume label
+   `cidata`, password hashed host-side via `openssl passwd -6`, optional SSH key
+   from `SSH_PUBLIC_KEY_FILE` / `~/.ssh/id_rsa.pub`), and installs without
+   interaction. Credentials are shown in the proposal and in the success reply.
+3. **Master-image import** — image ends in `.qcow2` (Fedora CoreOS / ignition
+   style, `--import`).
+
+Known limitation: fully unattended Ubuntu live-server installs require the
+`autoinstall` kernel argument, which cannot be passed alongside `--cdrom`. A
+`--location` + `--extra-args "autoinstall ..."` approach is the follow-up to make
+ISO autoinstall complete without any console interaction.
+
+## 43.4 New user-facing capabilities
+
+- **Master-image / ISO download** (`download_master_image`): "unduh master image
+  dari <url>". Agent extracts only the URL (http/https), the destination
+  directory comes from `MCP_MASTER_IMAGE_DIR`, and the download runs through the
+  confirmation gate. Files are written world-readable (0644) so the hypervisor
+  can read them.
+- **VM access / SSH info** (`get_vm_access`): "ssh <vm>" / "akses <vm>" returns
+  the real IP (via `virsh domifaddr`), the SSH command, and honest credential
+  guidance. For autoinstalled VMs the provisioned username is remembered and
+  reported; passwords are shown at creation time and never fabricated.
+- **Delete VM** (`delete_vm`): "hapus vm <name>" proposes a destructive deletion
+  (stop + undefine + remove disk/seed), requiring explicit confirmation, then
+  executes. Only the VM's own disk and `*-seed.iso` are removed — never the
+  shared installer ISO or master images.
+
+## 43.5 Operations / intents (extends §7 VmOperation)
+
+`create_vm | list_vms | start_vm | stop_vm | reboot_vm | get_vm |
+get_vm_access | delete_vm | download_master_image`.
+
+`get_vm_access`, `download_master_image`, and `delete_vm` reuse the same
+confirmation/idempotency machinery (`PendingProposal`, `confirmation_id`,
+`consumed`, `hasExecuted`/`markExecuted`) via `/api/chat` and `/api/vm/confirm`.
+Read-only queries (`list_vms`, `get_vm_access`) run without confirmation;
+`delete_vm` and `download_master_image` require it.
+
+## 43.6 Configuration additions (extends §4, §9)
+
+New environment variables:
+
+```text
+MCP_MASTER_IMAGE_DIR     # host dir for downloaded images (default /iso)
+SSH_PUBLIC_KEY_FILE      # optional; injected into autoinstalled VMs
+DEFAULT_NETWORK          # must be a bridge that EXISTS on the host
+```
+
+Observed on the reference host: the assumed `brforvms` bridge did not exist;
+`DEFAULT_NETWORK` was set to `virbr0` (libvirt's built-in NAT bridge). Layer 3
+infrastructure validation surfaces a bridge-not-found error clearly.
+
+## 43.7 Host prerequisites discovered (extends §9 Layer 3)
+
+Real VM creation on the reference host required:
+
+- `virtinst` (`virt-install`), `qemu-system-x86`, `libvirt-daemon-system`.
+- `libvirt-dev` + `pkg-config` + `gcc` + `python3-dev` to build the Python
+  `libvirt` binding for the vendored MCP server.
+- The backend process must run with the **`libvirt` group** active to reach
+  `/var/run/libvirt/libvirt-sock`.
+- The hypervisor user (`libvirt-qemu`) must be able to read the disk/image
+  directories (ACLs when they live under `$HOME`).
+- `xorriso` + `openssl` for building autoinstall seed ISOs and hashing passwords.
+
+These are documented step-by-step in `RUNNING.md`.
+
+## 43.8 Security notes (extends §6, §21)
+
+- Generated VM passwords are created in the backend, hashed host-side by the MCP
+  server (never stored in the guest config in plaintext), and **redacted in the
+  audit log** (the `password` key, including when nested under `credentials`,
+  matches the redaction filter).
+- The download tool restricts URLs to http/https and guards against path
+  traversal in the derived filename.
+- `delete_vm` never removes shared installer ISOs or master images.
+
+## 43.9 Tests (extends §31)
+
+Backend unit/contract suites cover, in addition to the original set: the ISO vs
+master-image argument selection, unattended-install credential generation and
+reporting, master-image download (propose/confirm/idempotency/scheme rejection),
+VM access replies, and VM deletion (propose-requires-confirm, delete-after-
+confirm, cancel, not-found). All suites run via `npm test` in `backend/`.
